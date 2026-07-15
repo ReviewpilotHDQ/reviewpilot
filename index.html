@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Activation Portal</title>
+    <!-- Load Supabase CDN Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- CSS Layout Styling -->
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .setup-box { background: white; padding: 35px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); width: 100%; max-width: 360px; text-align: center; display: none; }
+        .loading { font-size: 18px; color: #666; font-weight: 500; }
+        h2 { margin: 0 0 8px 0; color: #1a1a1a; }
+        p { color: #666; font-size: 14px; margin-bottom: 25px; }
+        input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; font-size: 14px; transition: border 0.2s; }
+        input:focus { border-color: #007bff; outline: none; }
+        button { width: 100%; padding: 13px; background: #007bff; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 15px; font-size: 16px; transition: background 0.2s; }
+        button:hover { background: #0056b3; }
+        .badge { background: #e2e8f0; padding: 4px 10px; border-radius: 12px; font-size: 13px; color: #4a5568; }
+    </style>
+</head>
+<body>
+
+<!-- Status text while searching the database -->
+<div id="loading-state" class="loading">Verifying Routing Protocols...</div>
+
+<!-- Setup Portal Interface (Hidden by default until database check clears) -->
+<div id="setup-portal" class="setup-box">
+    <h2>Unassigned Hardware</h2>
+    <p>Device Token: <span class="badge" id="display-id"></span></p>
+    <input type="url" id="client-url" placeholder="Paste Client's Google Review Link" required>
+    <input type="password" id="master-pin" placeholder="Enter Reseller Master PIN" required>
+    <button onclick="assignCard()">Lock to Business</button>
+</div>
+
+<!-- JavaScript Logic Engine -->
+<!-- JavaScript Logic Engine -->
+<script>
+    window.addEventListener('DOMContentLoaded', () => {
+        // 1. Database Credentials
+        const SUPABASE_URL = "https://xoqshurvxfkbfkrztosx.supabase.co"; 
+        const SUPABASE_KEY = "sb_publishable_qej37AZ2tVUBbLVw7zHdAA_lboXC8TN"; 
+        
+        if (!window.supabase || !window.supabase.createClient) {
+            document.getElementById('loading-state').innerText = "Library Error: Supabase CDN failed to load.";
+            return;
+        }
+
+        // 2. FIXED: Named this variable 'supabaseClient' to prevent name collision crashes
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Read the unique ID appended to the URL string (?id=xxxx)
+        const urlParams = new URLSearchParams(window.location.search);
+        const cardId = urlParams.get('id');
+
+        if (!cardId) {
+            document.getElementById('loading-state').innerText = "System Error: Missing Hardware Token ID.";
+            return;
+        }
+
+        // Connects to Supabase to see if this card ID has a business link linked to it
+        async function checkCardRoute() {
+            try {
+                let { data, error } = await supabaseClient
+                    .from('card_routes')
+                    .select('destination_url, status')
+                    .eq('id', cardId)
+                    .maybeSingle(); 
+
+                if (error) throw error;
+
+                // Case A: Row exists and is active -> Forward customer to business immediately
+                if (data && data.status === 'assigned' && data.destination_url) {
+                    window.location.replace(data.destination_url);
+                } else {
+                    // Case B: Row doesn't exist yet or is unassigned -> Initialize Setup Interface
+                    document.getElementById('loading-state').style.display = 'none';
+                    document.getElementById('display-id').innerText = cardId;
+                    document.getElementById('setup-portal').style.display = 'block';
+                }
+            } catch (err) {
+                document.getElementById('loading-state').innerText = "Database Connection Error: " + err.message;
+            }
+        }
+
+        // Bind the assignment action to the global window so the button can see it
+        window.assignCard = async function() {
+            const targetUrl = document.getElementById('client-url').value;
+            const enteredPin = document.getElementById('master-pin').value;
+
+            if (enteredPin !== "1406") { 
+                alert("Security Violation: Incorrect Reseller Master PIN.");
+                return;
+            }
+
+            if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+                alert("Validation Error: Please paste a valid URL starting with http:// or https://");
+                return;
+            }
+
+            try {
+                const { error } = await supabaseClient
+                    .from('card_routes')
+                    .upsert({ id: cardId, destination_url: targetUrl, status: 'assigned' });
+
+                if (error) throw error;
+
+                alert("Success! Hardware successfully locked to business.");
+                window.location.reload(); 
+            } catch (err) {
+                alert("Database Error: " + err.message);
+            }
+        };
+
+        // Execute the engine check
+        checkCardRoute();
+    });
+</script>
+</body>
+</html>
