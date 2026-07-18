@@ -60,20 +60,34 @@
             return;
         }
 
-        // Connects to Supabase to see if this card ID has a business link linked to it
+        // Structural validation only (protocol + parseability). This is a UX guard;
+        // the real security boundary is server-side inside assign_card_route below.
+        function isValidTargetUrl(str) {
+            try {
+                const u = new URL(str);
+                return u.protocol === "https:" || u.protocol === "http:";
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Connects to Supabase to see if this card ID has a business link linked to it.
+        // Note: card_routes has RLS enabled with NO policies, so a direct
+        // .from('card_routes').select() would return nothing — this RPC is the
+        // only read path, and it deliberately returns just enough (destination_url,
+        // status) for the redirect decision, nothing else about the table.
         async function checkCardRoute() {
             try {
-                let { data, error } = await supabaseClient
-                    .from('card_routes')
-                    .select('destination_url, status')
-                    .eq('id', cardId)
-                    .maybeSingle(); 
+                const { data, error } = await supabaseClient
+                    .rpc('get_card_route', { p_card_id: cardId });
 
                 if (error) throw error;
 
+                const route = data && data[0];
+
                 // Case A: Row exists and is active -> Forward customer to business immediately
-                if (data && data.status === 'assigned' && data.destination_url) {
-                    window.location.replace(data.destination_url);
+                if (route && route.exists_row && route.status === 'assigned' && route.destination_url && isValidTargetUrl(route.destination_url)) {
+                    window.location.replace(route.destination_url);
                 } else {
                     // Case B: Row doesn't exist yet or is unassigned -> Initialize Setup Interface
                     document.getElementById('loading-state').style.display = 'none';
@@ -87,28 +101,42 @@
 
         // Bind the assignment action to the global window so the button can see it
         window.assignCard = async function() {
-            const targetUrl = document.getElementById('client-url').value;
+            const targetUrl = document.getElementById('client-url').value.trim();
             const enteredPin = document.getElementById('master-pin').value;
 
-            if (enteredPin !== "1406") { 
-                alert("Security Violation: Incorrect Reseller Master PIN.");
+            if (!enteredPin) {
+                alert("Please enter the Reseller Master PIN.");
                 return;
             }
 
-            if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+            if (!isValidTargetUrl(targetUrl)) {
                 alert("Validation Error: Please paste a valid URL starting with http:// or https://");
                 return;
             }
 
             try {
+                // The PIN is sent to the database and checked there, inside
+                // assign_card_route, against a bcrypt hash — it's never compared
+                // to a hardcoded string in this file, and the table itself
+                // cannot be written to without a correct PIN.
                 const { error } = await supabaseClient
-                    .from('card_routes')
-                    .upsert({ id: cardId, destination_url: targetUrl, status: 'assigned' });
+                    .rpc('assign_card_route', {
+                        p_card_id: cardId,
+                        p_pin: enteredPin,
+                        p_target_url: targetUrl
+                    });
 
-                if (error) throw error;
+                if (error) {
+                    if (/invalid reseller pin/i.test(error.message)) {
+                        alert("Security Violation: Incorrect Reseller Master PIN.");
+                    } else {
+                        alert("Database Error: " + error.message);
+                    }
+                    return;
+                }
 
                 alert("Success! Hardware successfully locked to business.");
-                window.location.reload(); 
+                window.location.reload();
             } catch (err) {
                 alert("Database Error: " + err.message);
             }
